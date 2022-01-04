@@ -77,6 +77,8 @@ async-native-tls = { version = "0.3.3", optional = true }
 
 web-sys = { optional = true, version = "0.3.25", features = ["TextDecoder"] }
 
+chrono = "0.4.19"
+
 
 [dev-dependencies]
 async-std = { version = "1.6.0", features = ["attributes"] }

@@ -60,9 +60,11 @@ use crate::{Client, Request, Response, Result};
 
 mod logger;
 mod redirect;
+mod retry_after;
 
 pub use logger::Logger;
 pub use redirect::Redirect;
+pub use retry_after::RetryAfter;
 
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
