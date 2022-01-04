@@ -54,6 +54,8 @@ impl Redirect {
     ///
     /// This will presently make at least one additional HTTP request before the actual request to
     /// determine if there is a redirect that should be followed, so as to preserve any request body.
+    /// 
+    /// This does not honor the retry-after header which may be present on 301 Moved Permanently reponses.
     ///
     /// # Examples
     ///

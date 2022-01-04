@@ -78,6 +78,7 @@ async-native-tls = { version = "0.3.3", optional = true }
 web-sys = { optional = true, version = "0.3.25", features = ["TextDecoder"] }
 
 chrono = "0.4.19"
+time = "0.1.44" # cannot upgrade as method is removed
 
 
 [dev-dependencies]

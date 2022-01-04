@@ -12,10 +12,15 @@
 //! # Ok(()) }
 //! ```
 
+use std::time::Duration;
+
 use crate::http::{headers, StatusCode};
 use crate::middleware::{Middleware, Next, Request, Response};
 use crate::{Client, Result};
-use chrono::*;
+// use chrono::*;
+use async_std::task;
+use chrono::NaiveDateTime;
+use time;
 
 // List of acceptible 300-series redirect codes.
 const RETRY_AFTER_CODES: &[StatusCode] = &[
@@ -55,7 +60,7 @@ impl RetryAfter {
     /// # #[async_std::main]
     /// # async fn main() -> surf::Result<()> {
     /// let req = surf::get("https://httpbin.org/RetryAfter/2");
-    /// let client = surf::client().with(surf::middleware::RetryAfter::new(5));
+    /// let client = surf::client().with(surf::middleware::RetryAfter::new(5, 30, 60));
     /// let mut res = client.send(req).await?;
     /// dbg!(res.body_string().await?);
     /// # Ok(()) }
@@ -73,36 +78,47 @@ impl RetryAfter {
 impl Middleware for RetryAfter {
     #[allow(missing_doc_code_examples)]
     async fn handle(&self, mut req: Request, client: Client, next: Next<'_>) -> Result<Response> {
-        let mut RetryAfter_count: u8 = 0;
+        let mut count: u8 = 0;
+        let mut accumulated_duration = Duration::ZERO;
 
         let mut base_url = req.url().clone();
 
-        while RetryAfter_count < self.attempts {
-            RetryAfter_count += 1;
+        while count < self.attempts {
             let r: Request = req.clone();
             let res: Response = client.send(r).await?;
             if RETRY_AFTER_CODES.contains(&res.status()) {
                 if let Some(retry) = res.header(headers::RETRY_AFTER) {
+                    // header present, parse it to extract delay
                     let retry_header_value = retry.last().as_str();
-                    let delay = if let delay_sec = retry_header_value.parse::<u16>() {
-                        Some(chrono::Duration::seconds(delay_sec as i64))
-                    } else if let future_time = retry_header_value.parse::<chrono::DateTime>() {
-                        let delay = future_time - chrono::DateTime::now();
-                        if delay.milliseconds() > 0 {
-                            Some(delay)
-                        }
+                    let delay = if let Ok(delay_sec) = retry_header_value.parse::<u64>() {
+                        Some(Duration::new(delay_sec, 0))
+                    } else if let Ok(delay_sec) = delay_from_date_str(retry_header_value) {
+                        Some(delay_sec)
                     } else {
                         // invalid retry-after header
                         None
                     };
                     match delay {
-                        Some(delay) => Task::delay(delay).await,
+                        // delay valid, apply it unless it exceeds limits
+                        Some(delay) => {
+                            if (self.max_delay_sec as f32) < delay.as_secs_f32() {
+                                break; // stop retry behavior
+                            }
+                            accumulated_duration += delay;
+                            if (self.deadline_sec as f32) < accumulated_duration.as_secs_f32() {
+                                break; // stop retry behavior
+                            }
+                            count += 1;
+                            task::sleep(delay).await; // sleep an retry
+                        }
+                        // delay invalid, continue processing
                         None => {
-                            return Err(format!(
-                                "Invalid retry-after header ('{}') in response {}",
-                                &retry_header_value,
-                                &res.status()
-                            ))
+                            break; // stop retry behavior
+                                   // log.warn!(
+                                   //     "Invalid retry-after header ('{}') in response {}",
+                                   //     &retry_header_value,
+                                   //     &res.status()
+                                   // );
                         }
                     }
                 }
@@ -115,6 +131,26 @@ impl Middleware for RetryAfter {
     }
 }
 
+/// If cannot parse, returns error.
+/// If parsed value is in future, returns duration to wait.
+/// If parsed value is not in future, returns zero duration.
+/// reference: https://docs.rs/hyper/0.11.7/src/hyper/header/shared/httpdate.rs.html#35-44
+fn delay_from_date_str(s: &str) -> Result<Duration> {
+    match time::strptime(s, "%a, %d %b %Y %T %Z")
+        .or_else(|_| time::strptime(s, "%A, %d-%b-%y %T %Z"))
+        .or_else(|_| time::strptime(s, "%c"))
+    {
+        Ok(t) => Ok(NaiveDateTime::from_timestamp(t.to_timespec().sec, 0)
+            .signed_duration_since(chrono::offset::Utc::now().naive_utc())
+            .to_std()
+            .unwrap_or(Duration::ZERO)),
+        Err(e) => Err(http_types::Error::from_str(
+            StatusCode::InternalServerError,
+            format!("could not parse date: {}", s),
+        )),
+    }
+}
+
 impl Default for RetryAfter {
     /// Create a new instance of the RetryAfter middleware.
     fn default() -> Self {
@@ -122,6 +158,6 @@ impl Default for RetryAfter {
             attempts: 3,
             max_delay_sec: 30,
             deadline_sec: 60,
-        };
+        }
     }
 }
