@@ -12,6 +12,7 @@
 //! # Ok(()) }
 //! ```
 
+use std::fmt::Arguments;
 use std::time::Duration;
 
 use crate::http::{headers, StatusCode};
@@ -90,6 +91,16 @@ impl Middleware for RetryAfter {
                 if let Some(retry) = res.header(headers::RETRY_AFTER) {
                     // header present, parse it to extract delay
                     let retry_header_value = retry.last().as_str();
+                    print(
+                        log::Level::Info,
+                        format_args!(
+                            "{} {} response contained retry header {} {}",
+                            req.method(),
+                            req.url(),
+                            headers::RETRY_AFTER,
+                            retry_header_value,
+                        ),
+                    );
                     let delay = if let Ok(delay_sec) = retry_header_value.parse::<u64>() {
                         Some(Duration::new(delay_sec, 0))
                     } else if let Ok(delay_sec) = delay_from_date_str(retry_header_value) {
@@ -123,6 +134,7 @@ impl Middleware for RetryAfter {
                     }
                 }
             } else {
+                // headers::RETRY_AFTER not present, no retry
                 break;
             }
         }
@@ -160,4 +172,14 @@ impl Default for RetryAfter {
             deadline_sec: 60,
         }
     }
+}
+
+fn print(level: log::Level, msg: Arguments<'_>) {
+    log::logger().log(
+        &log::Record::builder()
+            .args(msg)
+            .level(level)
+            .line(Some(line!()))
+            .build(),
+    );
 }
